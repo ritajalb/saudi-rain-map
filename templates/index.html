@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Saudi Arabia Weather Contour Viewer</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pikaday/css/pikaday.css">
+  <script src="https://cdn.jsdelivr.net/npm/pikaday/pikaday.js"></script>
+
+  <!-- Plotly for Wind Rose -->
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+
+  <style>
+    .apple-cal-wrap { margin-top: 10px; }
+    .apple-row { display:flex; gap:10px; }
+    .apple-row > * { flex:1; }
+
+    .apple-input{
+      width:100%; padding:10px 12px; border:1px solid rgba(0,0,0,.15);
+      border-radius:12px; font-size:14px; outline:none; background:#fff;
+    }
+    .apple-input:focus{
+      border-color: rgba(0,122,255,.65);
+      box-shadow: 0 0 0 3px rgba(0,122,255,.15);
+    }
+    .apple-hint{ margin-top:6px; font-size:12px; opacity:.75; line-height:1.4; }
+
+    .pika-single{
+      border-radius:14px !important;
+      border:1px solid rgba(0,0,0,.15) !important;
+      box-shadow:0 12px 30px rgba(0,0,0,.18) !important;
+      overflow:hidden;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    }
+    .pika-title{
+      padding:10px 10px 6px 10px !important;
+      background:rgba(250,250,250,1) !important;
+      border-bottom:1px solid rgba(0,0,0,.08) !important;
+    }
+    .pika-label{ font-weight:600 !important; color:rgba(0,0,0,.85) !important; }
+    .pika-select{
+      border-radius:10px !important; border:1px solid rgba(0,0,0,.12) !important;
+      padding:6px 8px !important; font-size:13px !important; background:#fff !important;
+      outline:none !important; cursor:pointer !important;
+    }
+    .pika-table th{ color:rgba(0,0,0,.45) !important; font-weight:600 !important; font-size:12px !important; }
+    .pika-button{ border-radius:10px !important; background:transparent !important; font-weight:500 !important; color:rgba(0,0,0,.85) !important; }
+    .pika-button:hover{ background: rgba(0,122,255,.12) !important; }
+    .is-selected .pika-button{ background: rgba(0,122,255,1) !important; color:#fff !important; border-radius:10px !important; box-shadow:none !important; }
+    .is-today .pika-button{ color: rgba(0,122,255,1) !important; font-weight:700 !important; }
+
+    .seasonal-box{ display:none; margin-top:10px; }
+    .season-row{ display:flex; gap:10px; margin-top:8px; }
+    .season-row > *{ flex:1; padding:10px 12px; border-radius:12px; border:1px solid rgba(0,0,0,.15); }
+
+    /* WindRose inside popup */
+    .wr-btn{
+      margin-top:10px; width:100%;
+      padding:8px 10px; border-radius:10px;
+      border:1px solid rgba(0,0,0,.12);
+      background:#fff; cursor:pointer;
+      font-weight:700;
+    }
+    .wr-wrap{ margin-top:10px; }
+    .wr-note{ font-size:12px; opacity:.7; margin-top:6px; }
+  </style>
+</head>
+
+<body>
+<div class="container">
+  <header>
+    <h1>Saudi Arabia Weather Contour Viewer</h1>
+    <p class="subtitle">Real-time Weather Analysis and Visualization</p>
+  </header>
+
+  <div id="map"></div>
+
+  <div class="controls-panel">
+    <div class="control-group">
+      <label for="variable-select">Variable:</label>
+      <select id="variable-select">
+        <option value="rainfall">Rainfall (mm)</option>
+        <option value="temperature" selected>Temperature (°C)</option>
+        <option value="humidity">Humidity (%)</option>
+        <option value="wind_speed">Wind Speed (m/s)</option>
+        <option value="wind_direction">Wind Direction (deg)</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label>Date selection:</label>
+
+      <div class="apple-cal-wrap">
+        <div class="apple-row">
+          <input id="date-start" class="apple-input" type="text" placeholder="Start date" readonly>
+          <input id="date-end" class="apple-input" type="text" placeholder="End date" readonly>
+        </div>
+
+        <div class="apple-hint">اختر البداية ثم النهاية.</div>
+
+        <div style="margin-top:10px">
+          <label><input type="checkbox" id="seasonal-toggle"> Seasonal (موسمي)</label>
+        </div>
+
+        <div id="seasonal-box" class="seasonal-box">
+          <div class="season-row">
+            <select id="season-select">
+              <option value="spring">Spring (ربيع)</option>
+              <option value="summer">Summer (صيف)</option>
+              <option value="autumn">Autumn (خريف)</option>
+              <option value="winter">Winter (شتاء)</option>
+            </select>
+            <select id="season-year"></select>
+          </div>
+          <div class="apple-hint">
+            الموسمي فعلي: شتاء=Dec–Feb، ربيع=Mar–May، صيف=Jun–Aug، خريف=Sep–Nov.
+          </div>
+        </div>
+
+        <div id="period-summary" style="margin-top:10px;font-size:12px;opacity:.85;line-height:1.4">
+          Period: <b>calendar</b><br/>
+          Selection: <b>Not selected</b>
+        </div>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label for="opacity-slider">Opacity:</label>
+      <input type="range" id="opacity-slider" min="0" max="100" value="80">
+      <span id="opacity-value">80%</span>
+    </div>
+
+    <div class="control-group">
+      <button id="reset-view" class="btn">Reset View</button>
+    </div>
+  </div>
+
+  <div class="legend-panel">
+    <img id="legend-img" src="/legend?var=temperature" alt="Legend">
+  </div>
+
+  <div class="time-slider-container">
+    <div class="time-display" id="time-display">UTC</div>
+    <input type="range" id="time-slider" min="0" max="47" value="0" step="1">
+    <div class="time-labels">
+      <span>Now</span><span>+6h</span><span>+12h</span><span>+24h</span><span>+36h</span><span>+47h</span>
+    </div>
+  </div>
+
+  <div class="layer-controls">
+    <button id="terrain-btn" class="layer-btn active">Terrain</button>
+    <button id="satellite-btn" class="layer-btn">Satellite</button>
+  </div>
+
+  <footer>
+    <p>Data Source: Open-Meteo. Click anywhere to show value.</p>
+  </footer>
+</div>
+
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <p>Loading data...</p>
+</div>
+
+<script src="/static/js/geo_layers.js"></script>
+
+<script>
+  const timestamps = {{ timestamps | tojson }};
+  let map, overlayLayer;
+  let currentVariable = 'temperature';
+  let currentTimestamp = timestamps[0];
+  let currentOpacity = 0.8;
+  let terrainLayer, satelliteLayer;
+
+  window.__PERIOD__ = "calendar";
+  window.__SEASON__ = null;
+  window.__SEASON_YEAR__ = null;
+  window.__DATE_START__ = null;
+  window.__DATE_END__ = null;
+
+  function fmtDate(d){
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const dd = String(d.getDate()).padStart(2,'0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  function parseYMD(ymd){
+    const [y,m,d] = ymd.split("-").map(Number);
+    return new Date(y, (m-1), d);
+  }
+  function clampToToday(ymd){
+    const today = new Date();
+    const dt = parseYMD(ymd);
+    if (dt > today) return fmtDate(today);
+    return ymd;
+  }
+  function seasonToRange(season, yearStr){
+    const y = parseInt(yearStr, 10);
+    if (season === "spring") return { start: `${y}-03-01`, end: `${y}-05-31` };
+    if (season === "summer") return { start: `${y}-06-01`, end: `${y}-08-31` };
+    if (season === "autumn") return { start: `${y}-09-01`, end: `${y}-11-30` };
+    return { start: `${y}-12-01`, end: `${y+1}-02-28` };
+  }
+
+  function updateSummary(){
+    const el = document.getElementById("period-summary");
+    if (!el) return;
+
+    let selection = "Not selected";
+    if (window.__PERIOD__ === "calendar" && window.__DATE_START__) {
+      selection = `${window.__DATE_START__} → ${window.__DATE_END__ || window.__DATE_START__}`;
+    }
+    if (window.__PERIOD__ === "seasonal" && window.__SEASON_YEAR__) {
+      selection = `${window.__SEASON__} / ${window.__SEASON_YEAR__}  (${window.__DATE_START__} → ${window.__DATE_END__})`;
+    }
+    el.innerHTML = `Period: <b>${window.__PERIOD__}</b><br/>Selection: <b>${selection}</b>`;
+  }
+
+  const nowYear = new Date().getFullYear();
+  const MIN_DATE = new Date(1980, 0, 1);
+  const MAX_DATE = new Date();
+
+  const seasonalToggle = document.getElementById("seasonal-toggle");
+  const seasonalBox = document.getElementById("seasonal-box");
+  const seasonSelect = document.getElementById("season-select");
+  const seasonYear = document.getElementById("season-year");
+
+  for (let y = nowYear; y >= 1980; y--) {
+    const opt = document.createElement("option");
+    opt.value = String(y);
+    opt.textContent = String(y);
+    seasonYear.appendChild(opt);
+  }
+
+  let startPicker, endPicker;
+
+  startPicker = new Pikaday({
+    field: document.getElementById('date-start'),
+    format: 'YYYY-MM-DD',
+    yearRange: [1980, nowYear],
+    minDate: MIN_DATE,
+    maxDate: MAX_DATE,
+    onSelect: function(date){
+      const s = fmtDate(date);
+      window.__DATE_START__ = s;
+      endPicker.setMinDate(date);
+
+      if (window.__DATE_END__ && window.__DATE_END__ < s) {
+        window.__DATE_END__ = null;
+        document.getElementById('date-end').value = "";
+      }
+
+      window.__PERIOD__ = "calendar";
+      seasonalToggle.checked = false;
+      seasonalBox.style.display = "none";
+      window.__SEASON__ = null;
+      window.__SEASON_YEAR__ = null;
+
+      updateSummary();
+      updateOverlay();
+      setTimeout(() => document.getElementById('date-end').click(), 0);
+    }
+  });
+
+  endPicker = new Pikaday({
+    field: document.getElementById('date-end'),
+    format: 'YYYY-MM-DD',
+    yearRange: [1980, nowYear],
+    minDate: MIN_DATE,
+    maxDate: MAX_DATE,
+    onSelect: function(date){
+      const e = fmtDate(date);
+
+      if (!window.__DATE_START__) {
+        window.__DATE_START__ = e;
+        document.getElementById('date-start').value = e;
+        startPicker.setDate(date, true);
+      }
+
+      if (e < window.__DATE_START__) {
+        window.__DATE_END__ = window.__DATE_START__;
+        document.getElementById('date-end').value = window.__DATE_START__;
+      } else {
+        window.__DATE_END__ = e;
+      }
+
+      startPicker.setMaxDate(date);
+
+      window.__PERIOD__ = "calendar";
+      seasonalToggle.checked = false;
+      seasonalBox.style.display = "none";
+      window.__SEASON__ = null;
+      window.__SEASON_YEAR__ = null;
+
+      updateSummary();
+      updateOverlay();
+    }
+  });
+
+  function applySeasonToDates(){
+    if (!window.__SEASON__ || !window.__SEASON_YEAR__) return;
+    const r = seasonToRange(window.__SEASON__, window.__SEASON_YEAR__);
+    const start = r.start;
+    const end = clampToToday(r.end);
+
+    window.__DATE_START__ = start;
+    window.__DATE_END__ = end;
+
+    document.getElementById('date-start').value = start;
+    document.getElementById('date-end').value = end;
+
+    startPicker.setDate(parseYMD(start), true);
+    endPicker.setMinDate(parseYMD(start));
+    endPicker.setDate(parseYMD(end), true);
+    startPicker.setMaxDate(parseYMD(end));
+  }
+
+  seasonalToggle.addEventListener("change", () => {
+    if (seasonalToggle.checked) {
+      seasonalBox.style.display = "block";
+      window.__PERIOD__ = "seasonal";
+      window.__SEASON__ = seasonSelect.value;
+      if (!window.__SEASON_YEAR__) {
+        seasonYear.value = String(nowYear);
+        window.__SEASON_YEAR__ = String(nowYear);
+      }
+      applySeasonToDates();
+    } else {
+      seasonalBox.style.display = "none";
+      window.__PERIOD__ = "calendar";
+      window.__SEASON__ = null;
+      window.__SEASON_YEAR__ = null;
+    }
+    updateSummary();
+    updateOverlay();
+  });
+
+  seasonSelect.addEventListener("change", (e) => {
+    window.__SEASON__ = e.target.value;
+    window.__PERIOD__ = "seasonal";
+    applySeasonToDates();
+    updateSummary();
+    updateOverlay();
+  });
+
+  seasonYear.addEventListener("change", (e) => {
+    window.__SEASON_YEAR__ = e.target.value;
+    window.__PERIOD__ = "seasonal";
+    applySeasonToDates();
+    updateSummary();
+    updateOverlay();
+  });
+
+  updateSummary();
+
+  // ---- Wind Rose helper (render inside any div id) ----
+  async function drawWindRoseInto(divId, lat, lon){
+    const holder = document.getElementById(divId);
+    if (!holder) return;
+
+    if (!window.__DATE_START__ || !window.__DATE_END__) {
+      holder.innerHTML = "<div class='wr-note'>اختاري Date range أول.</div>";
+      return;
+    }
+
+    holder.innerHTML = "<div class='wr-note'>Loading wind rose...</div>";
+
+    const url =
+      `/windrose?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}` +
+      `&start=${encodeURIComponent(window.__DATE_START__)}` +
+      `&end=${encodeURIComponent(window.__DATE_END__)}` +
+      `&model=era5_land`;
+
+    const js = await fetch(url).then(r => r.json());
+
+    const traces = [];
+    const dirs = js.direction_labels;
+
+    for (let i = 0; i < js.speed_bins.length - 1; i++) {
+      traces.push({
+        type: "barpolar",
+        r: js.matrix.map(row => row[i]),
+        theta: dirs,
+        name: `${js.speed_bins[i]}–${js.speed_bins[i+1]} m/s`,
+        opacity: 0.85
+      });
+    }
+
+    Plotly.newPlot(divId, traces, {
+      polar: {
+        angularaxis: { direction: "clockwise" },
+        radialaxis: { ticksuffix: "%" }
+      },
+      margin: { t: 10, b: 10, l: 10, r: 10 },
+      legend: { font: { size: 10 } }
+    }, {displayModeBar:false});
+  }
+
+  // =========================
+  // Map
+  // =========================
+  async function initMap() {
+    map = L.map('map', { center: [24.0, 45.0], zoom: 6, zoomControl: true });
+
+    terrainLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution: '© OpenStreetMap', maxZoom: 18 });
+    satelliteLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { attribution: '© Esri', maxZoom: 18 });
+
+    terrainLayer.addTo(map);
+
+    const bounds = L.latLngBounds(L.latLng(16.0, 34.5), L.latLng(32.0, 56.0));
+    map.setMaxBounds(bounds);
+    map.fitBounds(bounds);
+
+    map.on('click', async (e) => {
+      if (window.__BLOCK_MAP_CLICK__) return;
+
+      const h = document.getElementById('time-slider').value;
+
+      if (window.__DATE_START__) {
+        try {
+          const start = window.__DATE_START__;
+          const end = window.__DATE_END__ || window.__DATE_START__;
+          const url =
+            `/historical_point?lat=${encodeURIComponent(e.latlng.lat)}&lon=${encodeURIComponent(e.latlng.lng)}` +
+            `&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}` +
+            `&mode=range&h=${encodeURIComponent(h)}&model=era5_land`;
+
+          const js = await (await fetch(url)).json();
+          const val = js && js.metrics ? js.metrics[currentVariable] : null;
+          const shown = (val === null || val === undefined || isNaN(val)) ? "-" : Number(val).toFixed(1);
+
+          L.popup().setLatLng(e.latlng)
+            .setContent(`<b>${currentVariable} (Historical)</b><br/>Value: ${shown}`)
+            .openOn(map);
+          return;
+        } catch (err) {
+          console.error(err);
+        }
+      }
+
+      const url = `/point?lat=${e.latlng.lat}&lon=${e.latlng.lng}&var=${currentVariable}&h=${h}`;
+      const js = await (await fetch(url)).json();
+      L.popup().setLatLng(e.latlng)
+        .setContent(`<b>${currentVariable}</b><br/>Value: ${Number(js.value).toFixed(1)}`)
+        .openOn(map);
+    });
+
+    updateOverlay();
+    updateTimeDisplay(0);
+
+    // ✅ addGeoLayers draws province/governorate popups
+    // وداخلها نرسم wind rose (بتعديل بسيط تحت)
+    try { await addGeoLayers(map, drawWindRoseInto); }
+    catch (e) { console.error("Failed to add geo layers:", e); }
+  }
+
+  function updateOverlay() {
+    document.getElementById('loading-overlay').style.display = 'flex';
+    if (overlayLayer) map.removeLayer(overlayLayer);
+
+    let overlayUrl = `/overlay?var=${encodeURIComponent(currentVariable)}&t=${encodeURIComponent(currentTimestamp)}`;
+
+    if (window.__DATE_START__) {
+      const start = window.__DATE_START__;
+      const end = window.__DATE_END__ || window.__DATE_START__;
+
+      overlayUrl =
+        `/overlay?var=${encodeURIComponent(currentVariable)}` +
+        `&start=${encodeURIComponent(start)}` +
+        `&end=${encodeURIComponent(end)}` +
+        `&model=era5_land&mode=range&h=${encodeURIComponent(document.getElementById('time-slider').value)}`;
+    }
+
+    overlayLayer = L.imageOverlay(overlayUrl, [[16.0, 34.5], [32.0, 56.0]], {
+      opacity: currentOpacity,
+      interactive: false
+    });
+
+    overlayLayer.addTo(map);
+    document.getElementById('legend-img').src = `/legend?var=${encodeURIComponent(currentVariable)}`;
+
+    overlayLayer.getElement()?.addEventListener('load', () => {
+      document.getElementById('loading-overlay').style.display = 'none';
+    });
+  }
+
+  function updateTimeDisplay(index) {
+    const timestamp = timestamps[index];
+    const date = new Date(timestamp);
+    const formatted = date.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+    document.getElementById('time-display').textContent = formatted;
+  }
+
+  document.getElementById('variable-select').addEventListener('change', (e) => {
+    currentVariable = e.target.value;
+    updateOverlay();
+  });
+
+  document.getElementById('opacity-slider').addEventListener('input', (e) => {
+    currentOpacity = e.target.value / 100;
+    document.getElementById('opacity-value').textContent = e.target.value + '%';
+    if (overlayLayer) overlayLayer.setOpacity(currentOpacity);
+  });
+
+  document.getElementById('time-slider').addEventListener('input', (e) => {
+    const index = parseInt(e.target.value);
+    currentTimestamp = timestamps[index];
+    updateTimeDisplay(index);
+    updateOverlay();
+  });
+
+  document.getElementById('reset-view').addEventListener('click', () => {
+    const bounds = L.latLngBounds(L.latLng(16.0, 34.5), L.latLng(32.0, 56.0));
+    map.fitBounds(bounds);
+  });
+
+  document.getElementById('terrain-btn').addEventListener('click', () => {
+    if (!map.hasLayer(terrainLayer)) {
+      map.removeLayer(satelliteLayer);
+      terrainLayer.addTo(map);
+      document.getElementById('terrain-btn').classList.add('active');
+      document.getElementById('satellite-btn').classList.remove('active');
+    }
+  });
+
+  document.getElementById('satellite-btn').addEventListener('click', () => {
+    if (!map.hasLayer(satelliteLayer)) {
+      map.removeLayer(terrainLayer);
+      satelliteLayer.addTo(map);
+      document.getElementById('satellite-btn').classList.add('active');
+      document.getElementById('terrain-btn').classList.remove('active');
+    }
+  });
+
+  initMap();
+</script>
+</body>
+</html>
